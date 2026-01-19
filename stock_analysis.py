@@ -1,13 +1,26 @@
 import requests
 import yfinance as yf
 import os
+from bs4 import BeautifulSoup
 
-# 設定您的 Discord Webhook (記得要在新專案的 Settings > Secrets 裡設定)
+# 設定您的 Discord Webhook
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK")
 
+def get_stock_news(cname):
+    """針對個股抓取最新產業新聞摘要"""
+    try:
+        # 搜尋個股名稱 + 產業展望
+        url = f"https://news.google.com/rss/search?q={cname}+產業+展望+when:24h&hl=zh-TW&gl=TW&ceid=TW:zh-tw"
+        res = requests.get(url)
+        soup = BeautifulSoup(res.content, features="xml")
+        item = soup.find('item')
+        if item:
+            return f"📰 產業分析：{item.title.text[:40]}..."
+        return "📰 產業分析：暫無今日即時報導"
+    except:
+        return "📰 產業分析：讀取失敗"
+
 def get_stock_analysis():
-    # 1. 定義您要追蹤的股票清單與中文化名稱
-    # 格式為 "Yahoo代號": "中文簡稱"
     target_stocks = {
         "2317.TW": "鴻海",
         "2330.TW": "台積電",
@@ -22,7 +35,6 @@ def get_stock_analysis():
     for symbol, cname in target_stocks.items():
         try:
             stock = yf.Ticker(symbol)
-            # 抓取最近一個月的歷史資料來計算月線 (20日)
             hist = stock.history(period="1mo")
             if hist.empty: continue
 
@@ -30,27 +42,38 @@ def get_stock_analysis():
             ma20 = hist['Close'].rolling(window=20).mean().iloc[-1]
             prev_price = hist['Close'].iloc[-2]
             
-            # 計算漲跌幅
             change_percent = ((current_price - prev_price) / prev_price) * 100
             
-            # 漲跌圖示
+            # --- 新增邏輯開始 ---
+            # 1. 🔥 漲幅警示：超過 5% 就加火
+            fire_prefix = "🔥 " if change_percent >= 5 else ""
+            
+            # 2. 漲跌圖示
             trend_emoji = "🔴" if change_percent < 0 else "🟢"
             
-            # 技術面判斷 (站上或跌破月線)
+            # 3. 獲取產業新聞
+            news_summary = get_stock_news(cname)
+            
+            # 4. 籌碼模擬 (因 yfinance 無台股籌碼，此處預留欄位，建議下午 3 點後參考盤後資訊)
+            chip_info = "籌碼：盤後結算中" # 未來可串接證交所 API
+            # --- 新增邏輯結束 ---
+
             ma_status = "站上月線" if current_price > ma20 else "跌破月線"
             ma_emoji = "✅" if current_price > ma20 else "⚠️"
 
-            # 組合訊息內容
-            report_content += f"**{cname} ({symbol})**\n"
+            # 組合訊息內容 (加入 fire_prefix)
+            report_content += f"{fire_prefix}**{cname} ({symbol})**\n"
             report_content += f"現價：{current_price:.2f} ({trend_emoji} {change_percent:+.2f}%)\n"
             report_content += f"技術：{ma_emoji} {ma_status}\n"
+            report_content += f"{chip_info}\n"
+            report_content += f"{news_summary}\n"
             report_content += f"建議：{'觀望' if current_price < ma20 else '強勢持股'}\n"
             report_content += "----------------------------\n"
 
         except Exception as e:
             print(f"處理 {symbol} 時出錯: {e}")
 
-    # 4. 發送到 Discord
+    # 發送到 Discord
     payload = {"content": report_content}
     requests.post(DISCORD_WEBHOOK_URL, json=payload)
 
