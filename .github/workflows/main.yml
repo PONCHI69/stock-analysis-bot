@@ -23,5 +23,5 @@ jobs:
 
       - name: 執行股市分析程式
         env:
-          STOCK_WEBHOOK: ${{ secrets.STOCK_WEBHOOK }}
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
         run: python stock_analysis.py
