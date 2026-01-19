@@ -2,9 +2,12 @@ name: Stock Analysis Bot
 
 on:
   schedule:
-    # 台灣時間週一至週五 下午 2:10 執行 (UTC 06:10)
-    - cron: '10 6 * * 1-5'
-  workflow_dispatch:      # 讓你可以隨時手動按按鈕測試
+    # 執行時間 (UTC)：
+    # 03:00 -> 台灣時間 11:00 (盤中觀察)
+    # 06:10 -> 台灣時間 14:10 (盤後結算)
+    - cron: '0 3 * * 1-5'   # 上午 11:00
+    - cron: '10 6 * * 1-5'  # 下午 02:10
+  workflow_dispatch:
 
 jobs:
   build:
