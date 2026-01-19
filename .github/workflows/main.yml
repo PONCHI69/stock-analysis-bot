@@ -1,0 +1,22 @@
+name: Stock Analysis Bot
+
+on:
+  schedule:
+    - cron: '30 5 * * 1-5'  # 台灣時間週一至週五 13:30 (收盤後)
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      - name: Install dependencies
+        run: pip install requests yfinance pandas
+      - name: Run analysis
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: python stock_analysis.py
