@@ -3,7 +3,7 @@ import yfinance as yf
 import os
 
 # 設定您的 Discord Webhook (記得要在新專案的 Settings > Secrets 裡設定)
-DISCORD_WEBHOOK_URL = os.getenv("STOCK_WEBHOOK")
+DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK")
 
 def get_stock_analysis():
     # 1. 定義您要追蹤的股票清單與中文化名稱
