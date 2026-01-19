@@ -31,8 +31,10 @@ def analyze_stock(stock_id):
     return f"**{stock_id}**\n當前股價：{price:.2f}\n20日均線：{ma20:.2f}\n目前狀態：{status}"
 
 if __name__ == "__main__":
-    # 設定你想關注的股票 (台股 .TW / 美股直接打代號)
-    mystocks = ["2330.TW", "2454.TW", "AAPL", "NVDA", "TSLA"]
+    # 加入鴻海的代號 2317.TW
+    target_stocks = ["2317.TW", "2330.TW", "0050.TW", "NVDA"]
+    for s in target_stocks:
+        analyze_stock(s)
     
     report = ""
     for s in mystocks:
