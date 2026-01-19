@@ -7,18 +7,25 @@ from bs4 import BeautifulSoup
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK")
 
 def get_stock_news(cname):
-    """針對個股抓取最新產業新聞摘要"""
+    """抓取多方產業新聞，提升客觀度"""
     try:
-        # 搜尋個股名稱 + 產業展望
-        url = f"https://news.google.com/rss/search?q={cname}+產業+展望+when:24h&hl=zh-TW&gl=TW&ceid=TW:zh-tw"
+        # 搜尋個股相關的產經新聞
+        url = f"https://news.google.com/rss/search?q={cname}+產業+OR+展望+when:24h&hl=zh-TW&gl=TW&ceid=TW:zh-tw"
         res = requests.get(url)
         soup = BeautifulSoup(res.content, features="xml")
-        item = soup.find('item')
-        if item:
-            return f"📰 產業分析：{item.title.text[:40]}..."
-        return "📰 產業分析：暫無今日即時報導"
+        
+        # 抓取前 3 則新聞，增加觀點廣度
+        items = soup.find_all('item')[:3]
+        news_list = []
+        for i in items:
+            # 嘗試從標題中分離出媒體名稱 (Google RSS 標題格式通常是 "標題 - 媒體")
+            news_list.append(f"• {i.title.text}")
+            
+        if news_list:
+            return "\n".join(news_list)
+        return "• 暫無今日即時產業報導"
     except:
-        return "📰 產業分析：讀取失敗"
+        return "• 新聞讀取失敗"
 
 def get_stock_analysis():
     target_stocks = {
