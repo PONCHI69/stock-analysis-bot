@@ -2,8 +2,8 @@ name: Stock Analysis Bot
 
 on:
   schedule:
-    - cron: '0 3 * * 1-5'   # 台灣 11:00
-    - cron: '30 5 * * 1-5'  # 台灣 13:30
+    - cron: '0 3 * * 1-5'
+    - cron: '30 5 * * 1-5'
   workflow_dispatch:
 
 jobs:
