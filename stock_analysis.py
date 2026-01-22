@@ -5,81 +5,73 @@ import os
 from bs4 import BeautifulSoup
 import time
 
+# --- 參數設定 ---
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK")
+VOL_RATIO_THRESHOLD = 2.0  # 成交量是 5 日均量的 2 倍以上
+MIN_CHANGE_PERCENT = 2.0   # 今日漲幅至少要 2% 才有攻擊力
+BIAS_LIMIT = 8.0           # 乖離率限制，避免追高
+MA_WINDOW = 20
 
 def get_potential_stocks():
-    """從 Yahoo 抓取熱門股清單並篩選具備潛力的個股"""
     print("正在掃描市場潛力標的...")
-    # 這裡我們抓取「成交量排行」作為掃描池，因為有量才有潛力
     try:
+        # 1. 獲取成交量排行 (台股上市)
         url = "https://tw.stock.yahoo.com/ranking/volume?type=tse"
-        df = pd.read_html(url)[0]
-        # 取前 30 檔熱門股進行深度掃描
-        candidate_list = df.head(30)
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        res = requests.get(url, headers=headers)
+        df = pd.read_html(res.text)[0]
+        
+        candidate_data = []
+        for _, row in df.head(30).iterrows():
+            raw_text = str(row['股票名稱']).split(' ')
+            if len(raw_text) >= 2:
+                candidate_data.append({"symbol": f"{raw_text[0]}.TW", "name": raw_text[1], "id": raw_text[0]})
+
+        symbols = [item['symbol'] for item in candidate_data]
+        
+        # 2. 批次抓取歷史數據
+        data = yf.download(symbols, period="40d", group_by='ticker', progress=False)
         
         potential_matches = []
-        for _, row in candidate_list.iterrows():
-            raw_text = str(row['股票名稱']).split(' ')
-            symbol, name = raw_text[0], raw_text[1]
-            full_symbol = f"{symbol}.TW"
+        for item in candidate_data:
+            s = item['symbol']
+            if s not in data or data[s].empty: continue
             
-            # 獲取技術面數據
-            stock = yf.Ticker(full_symbol)
-            df_hist = stock.history(period="40d")
-            if len(df_hist) < 25: continue
+            df_hist = data[s].dropna()
+            if len(df_hist) < MA_WINDOW + 1: continue
 
-            # --- 計算指標 ---
-            # 1. 量能：今日成交量 vs 5日均量
+            # --- 指標計算 ---
+            curr_price = df_hist['Close'].iloc[-1]
+            prev_price = df_hist['Close'].iloc[-2]
+            change_percent = ((curr_price - prev_price) / prev_price) * 100
+            
+            # 量能：今日量 vs 5日均量
             current_vol = df_hist['Volume'].iloc[-1]
             avg_vol_5d = df_hist['Volume'].iloc[-6:-1].mean()
             vol_ratio = current_vol / avg_vol_5d
 
-            # 2. 均線：計算 MA20
-            ma20 = df_hist['Close'].rolling(window=20).mean()
-            curr_price = df_hist['Close'].iloc[-1]
-            prev_price = df_hist['Close'].iloc[-2]
+            # 均線：MA20
+            ma20 = df_hist['Close'].rolling(window=MA_WINDOW).mean()
             curr_ma20 = ma20.iloc[-1]
             prev_ma20 = ma20.iloc[-2]
+            
+            # 乖離率 (距離月線多遠)
+            bias = ((curr_price - curr_ma20) / curr_ma20) * 100
 
-            # --- 潛力股條件 ---
-            # 條件 A: 帶量 (比均量大 1.5 倍)
-            # 條件 B: 突破 (昨天在月線下，今天在月線上)
-            # 條件 C: 趨勢 (月線趨勢向上)
-            is_vol_spike = vol_ratio > 1.5
+            # --- 篩選條件 ---
+            # 1. 起漲突破：昨天在線下，今天收盤在線上
             is_breakthrough = (prev_price <= prev_ma20) and (curr_price > curr_ma20)
+            # 2. 趨勢向上：MA20 斜率為正 (或持平)
             is_ma_up = curr_ma20 >= prev_ma20
+            # 3. 攻擊力：漲幅超過門檻且沒追高
+            is_strong = change_percent >= MIN_CHANGE_PERCENT and bias < BIAS_LIMIT
 
-            if is_breakthrough and is_ma_up:
+            if is_breakthrough and is_ma_up and is_strong:
                 potential_matches.append({
-                    "symbol": full_symbol,
-                    "name": name,
-                    "price": curr_price,
-                    "vol_ratio": vol_ratio,
-                    "reason": "帶量突破月線" if is_vol_spike else "均線扣抵轉強"
-                })
-        return potential_matches
-    except Exception as e:
-        print(f"掃描失敗: {e}")
-        return []
-
-def get_stock_news(cname):
-    try:
-        url = f"https://news.google.com/rss/search?q={cname}+展望+OR+亮點+when:24h&hl=zh-TW&gl=TW&ceid=TW:zh-tw"
-        res = requests.get(url)
-        soup = BeautifulSoup(res.content, features="xml")
-        items = soup.find_all('item')[:2]
-        return "\n".join([f"• {i.title.text}" for i in items]) if items else "• 暫無相關產業亮點報導"
-    except:
-        return "• 新聞讀取失敗"
-
-def run_analysis():
-    potentials = get_potential_stocks()
-    
-    if not potentials:
-        msg = "💡 今日盤中暫無符合「帶量突破」條件的潛力股。"
-    else:
-        msg = "🌟 **【潛力飆股預警】技術面突破掃描**\n"
-        msg += "----------------------------\n"
-        for s in potentials:
-            news = get_stock_news(s['name'])
-            msg += f"🎯 **{s['name']} ({s
+                    "symbol": s,
+                    "id": item['id'],
+                    "name": item['name'],
+                    "price": round(curr_price, 2),
+                    "change": round(change_percent, 2),
+                    "vol_ratio": round(vol_ratio, 2),
+                    "reason": "🔥 爆量強攻" if vol_ratio >= VOL_RATIO_THRESHOLD
