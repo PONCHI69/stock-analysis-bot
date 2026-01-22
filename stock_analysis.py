@@ -1,97 +1,85 @@
-import requests
 import yfinance as yf
-import os
 import pandas as pd
+import requests
+import os
 from bs4 import BeautifulSoup
 import time
 
-# 設定您的 Discord Webhook
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK")
 
-def get_all_taiwan_stock_symbols():
-    """
-    抓取台股所有上市櫃股票代碼
-    這裡簡化流程，示範抓取上市股票，建議實務上可讀取本地 CSV 檔提升速度
-    """
+def get_potential_stocks():
+    """從 Yahoo 抓取熱門股清單並篩選具備潛力的個股"""
+    print("正在掃描市場潛力標的...")
+    # 這裡我們抓取「成交量排行」作為掃描池，因為有量才有潛力
     try:
-        # 爬取證交所的公開代碼 (此處為示意，建議預先存好 list 以免被封)
-        url = "https://isin.twse.com.tw/isin/C_public.jsp?strMode=2"
-        res = requests.get(url)
-        df = pd.read_html(res.text)[0]
-        df.columns = df.iloc[0]
-        df = df.iloc[2:]
-        # 分離代碼與名稱 "2330　台積電"
-        stocks = df['有價證券代號及名稱'].str.split('　', expand=True)
-        # 過濾出純數字代碼 (排除權證、ETF等，視需求調整)
-        stocks = stocks[stocks[0].str.len() == 4]
-        return dict(zip(stocks[0] + ".TW", stocks[1]))
+        url = "https://tw.stock.yahoo.com/ranking/volume?type=tse"
+        df = pd.read_html(url)[0]
+        # 取前 30 檔熱門股進行深度掃描
+        candidate_list = df.head(30)
+        
+        potential_matches = []
+        for _, row in candidate_list.iterrows():
+            raw_text = str(row['股票名稱']).split(' ')
+            symbol, name = raw_text[0], raw_text[1]
+            full_symbol = f"{symbol}.TW"
+            
+            # 獲取技術面數據
+            stock = yf.Ticker(full_symbol)
+            df_hist = stock.history(period="40d")
+            if len(df_hist) < 25: continue
+
+            # --- 計算指標 ---
+            # 1. 量能：今日成交量 vs 5日均量
+            current_vol = df_hist['Volume'].iloc[-1]
+            avg_vol_5d = df_hist['Volume'].iloc[-6:-1].mean()
+            vol_ratio = current_vol / avg_vol_5d
+
+            # 2. 均線：計算 MA20
+            ma20 = df_hist['Close'].rolling(window=20).mean()
+            curr_price = df_hist['Close'].iloc[-1]
+            prev_price = df_hist['Close'].iloc[-2]
+            curr_ma20 = ma20.iloc[-1]
+            prev_ma20 = ma20.iloc[-2]
+
+            # --- 潛力股條件 ---
+            # 條件 A: 帶量 (比均量大 1.5 倍)
+            # 條件 B: 突破 (昨天在月線下，今天在月線上)
+            # 條件 C: 趨勢 (月線趨勢向上)
+            is_vol_spike = vol_ratio > 1.5
+            is_breakthrough = (prev_price <= prev_ma20) and (curr_price > curr_ma20)
+            is_ma_up = curr_ma20 >= prev_ma20
+
+            if is_breakthrough and is_ma_up:
+                potential_matches.append({
+                    "symbol": full_symbol,
+                    "name": name,
+                    "price": curr_price,
+                    "vol_ratio": vol_ratio,
+                    "reason": "帶量突破月線" if is_vol_spike else "均線扣抵轉強"
+                })
+        return potential_matches
     except Exception as e:
-        print(f"獲取股票清單失敗: {e}")
-        return {}
+        print(f"掃描失敗: {e}")
+        return []
 
 def get_stock_news(cname):
-    # (保持原有的 get_stock_news 函數內容)
     try:
-        url = f"https://news.google.com/rss/search?q={cname}+產業+OR+展望+when:24h&hl=zh-TW&gl=TW&ceid=TW:zh-tw"
+        url = f"https://news.google.com/rss/search?q={cname}+展望+OR+亮點+when:24h&hl=zh-TW&gl=TW&ceid=TW:zh-tw"
         res = requests.get(url)
         soup = BeautifulSoup(res.content, features="xml")
-        items = soup.find_all('item')[:2] # 縮減為 2 則以縮減訊息長度
-        news_list = [f"• {i.title.text}" for i in items]
-        return "\n".join(news_list) if news_list else "• 暫無今日即時報導"
+        items = soup.find_all('item')[:2]
+        return "\n".join([f"• {i.title.text}" for i in items]) if items else "• 暫無相關產業亮點報導"
     except:
         return "• 新聞讀取失敗"
 
-def get_stock_analysis():
-    # 1. 獲取全市場清單
-    all_stocks = get_all_taiwan_stock_symbols()
+def run_analysis():
+    potentials = get_potential_stocks()
     
-    # 如果股票太多，Discord 會有字數限制 (2000字)，建議設定篩選門檻
-    report_content = "🚀 **全市場異動股掃描 (漲幅 > 5% 或 站上月線)**\n"
-    report_content += "----------------------------\n"
-    
-    count = 0
-    for symbol, cname in all_stocks.items():
-        try:
-            # 限制分析數量，避免 Discord 爆掉或被 yfinance 封鎖
-            if count > 15: break 
-
-            stock = yf.Ticker(symbol)
-            # 抓取 1 個月資料來計算 MA
-            hist = stock.history(period="1mo")
-            if len(hist) < 20: continue
-
-            current_price = hist['Close'].iloc[-1]
-            prev_price = hist['Close'].iloc[-2]
-            ma20 = hist['Close'].rolling(window=20).mean().iloc[-1]
-            change_percent = ((current_price - prev_price) / prev_price) * 100
-
-            # --- 篩選邏輯：只回報「強勢股」或「剛站上月線」的股票 ---
-            is_strong = change_percent >= 5
-            is_breakthrough = (prev_price < ma20) and (current_price > ma20)
-
-            if is_strong or is_breakthrough:
-                news_summary = get_stock_news(cname)
-                fire_prefix = "🔥 " if is_strong else "⭐ "
-                
-                report_content += f"{fire_prefix}**{cname} ({symbol})**\n"
-                report_content += f"現價：{current_price:.2f} ({'+' if change_percent > 0 else ''}{change_percent:.2f}%)\n"
-                report_content += f"技術：{'✅ 突破月線' if is_breakthrough else '✅ 強勢噴發'}\n"
-                report_content += f"{news_summary}\n"
-                report_content += "----------------------------\n"
-                
-                count += 1
-                # 稍微延遲避免頻率過快
-                time.sleep(0.5)
-
-        except Exception as e:
-            continue
-
-    # 5. 發送 (注意 Discord 訊息長度限制)
-    if count > 0:
-        payload = {"content": report_content}
-        requests.post(DISCORD_WEBHOOK_URL, json=payload)
+    if not potentials:
+        msg = "💡 今日盤中暫無符合「帶量突破」條件的潛力股。"
     else:
-        requests.post(DISCORD_WEBHOOK_URL, json={"content": "今日全市場無符合篩選條件之股票。"})
-
-if __name__ == "__main__":
-    get_stock_analysis()
+        msg = "🌟 **【潛力飆股預警】技術面突破掃描**\n"
+        msg += "----------------------------\n"
+        for s in potentials:
+            news = get_stock_news(s['name'])
+            msg += f"🎯 **{s['name']} ({s
