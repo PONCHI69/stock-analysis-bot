@@ -74,4 +74,6 @@ def get_potential_stocks():
                     "price": round(curr_price, 2),
                     "change": round(change_percent, 2),
                     "vol_ratio": round(vol_ratio, 2),
-                    "reason": "🔥 爆量強攻" if vol_ratio >= VOL_RATIO_THRESHOLD
+                    "reason": "🔥 爆量強攻" if vol_ratio >= VOL_RATIO_THRESHOLD else "📈 技術轉強"
+                }) # <--- 檢查這裡有沒有漏掉 })
+        return potential_matches
