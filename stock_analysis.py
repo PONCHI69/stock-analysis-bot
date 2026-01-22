@@ -7,16 +7,13 @@ import time
 
 # --- 參數設定 ---
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK")
-VOL_RATIO_THRESHOLD = 2.0  # 成交量翻倍
-MIN_CHANGE_PERCENT = 2.0   # 漲幅門檻
-BIAS_LIMIT = 8.0           # 乖離率限制
 MA_WINDOW = 20
 
-def get_growth_stocks():
+def get_potential_stocks():
     print("正在掃描具備『翻倍潛力』的長線標的...")
     try:
-        # 1. 抓取熱門股作為初始池 (或可自行更換為 0050 成分股)
-        url = "https://tw.stock.yahoo.com"
+        # 1. 抓取 Yahoo 熱門股 (修正 URL)
+        url = "https://tw.stock.yahoo.com/ranking/volume?type=tse"
         headers = {'User-Agent': 'Mozilla/5.0'}
         res = requests.get(url, headers=headers)
         df = pd.read_html(res.text)[0]
@@ -42,44 +39,40 @@ def get_growth_stocks():
 
             # --- [核心計算區] ---
             curr_price = df_hist['Close'].iloc[-1]
+            prev_price = df_hist['Close'].iloc[-2]
             two_year_high = df_hist['Close'].max()
+            change_percent = ((curr_price - prev_price) / prev_price) * 100
             
             # 1. 長線均線指標 (MA200)
             ma200_all = df_hist['Close'].rolling(window=200).mean()
             curr_ma200 = ma200_all.iloc[-1]
-            prev_ma200 = ma200_all.iloc[-20] # 20天前(約一個月)的年線
+            prev_ma200 = ma200_all.iloc[-20] # 約一個月前的年線
 
             # 2. 底部溫量指標
+            current_vol = df_hist['Volume'].iloc[-1]
             avg_vol_short = df_hist['Volume'].iloc[-10:].mean()  # 近10日均量
             avg_vol_long = df_hist['Volume'].iloc[-120:].mean()  # 近半年均量
+            vol_ratio = current_vol / (df_hist['Volume'].iloc[-6:-1].mean())
 
             # --- [強化版篩選條件] ---
-            
-            # 條件 A: 價格剛站上年線且乖離不大 (安全區)
+            # A: 價格剛站上年線且乖離不大
             is_base_breakout = (curr_price > curr_ma200) and (curr_price < curr_ma200 * 1.2)
-            
-            # 條件 B: 年線趨勢走平或轉強 (避開下墜中的年線)
-            # 2026 策略：年線下滑斜率不可超過 1%
+            # B: 年線趨勢走平或轉強
             is_ma200_stable = curr_ma200 >= prev_ma200 * 0.99 
-            
-            # 條件 C: 底部溫量 (代表法人/大戶開始低檔佈局)
+            # C: 底部溫量
             is_volume_building = avg_vol_short > avg_vol_long
-            
-            # 條件 D: 歷史位階 (距離高點仍有空間)
+            # D: 歷史位階 (距離高點仍有空間)
             has_room = curr_price < (two_year_high * 0.8)
 
-            # 條件 E: 獲利過濾 (選配)
-            # 註：yf.Ticker 請求較慢，建議掃描量大時慎用
-            # stock_info = yf.Ticker(s).info
-            # is_profitable = stock_info.get('forwardEps', 0) > 0
-
-            # --- [最終判定] ---
             if is_base_breakout and is_ma200_stable and is_volume_building and has_room:
                 long_term_picks.append({
                     "id": item['id'],
                     "name": item['name'],
                     "price": round(curr_price, 2),
-                    "dist_to_high": round(((two_year_high - curr_price) / curr_price) * 100, 1)
+                    "change": round(change_percent, 2),
+                    "vol_ratio": round(vol_ratio, 2),
+                    "dist_to_high": round(((two_year_high - curr_price) / curr_price) * 100, 1),
+                    "reason": "💎 長線築底完成"
                 })
         
         return long_term_picks
@@ -90,7 +83,7 @@ def get_growth_stocks():
 
 def get_stock_news(cname):
     try:
-        url = f"https://news.google.com/rss/search?q={cname}+股票+OR+營收+when:24h&hl=zh-TW&gl=TW&ceid=TW:zh-tw"
+        url = f"https://news.google.com/rss/search?q={cname}+股票+OR+營育+when:24h&hl=zh-TW&gl=TW&ceid=TW:zh-tw"
         res = requests.get(url)
         soup = BeautifulSoup(res.content, features="xml")
         items = soup.find_all('item')[:2]
@@ -102,16 +95,16 @@ def run_analysis():
     potentials = get_potential_stocks()
     
     if not potentials:
-        msg = "💡 今日暫未掃描到符合條件之起漲點強勢股。"
+        msg = "💡 今日暫未掃描到符合「長線倍增」條件之潛力股。"
     else:
-        msg = "🌟 **【起漲潛力股掃描】量價齊揚預警**\n"
+        msg = "🌟 **【倍增潛力股掃描】長線底部預警**\n"
         msg += "----------------------------\n"
         for s in potentials:
             news = get_stock_news(s['name'])
             yahoo_link = f"https://tw.stock.yahoo.com/quote/{s['id']}"
             msg += f"🎯 **{s['name']} ({s['id']})**\n"
             msg += f"現價：{s['price']} ({s['change']:+}%)\n"
-            msg += f"訊號：{s['reason']} (量比:{s['vol_ratio']}x)\n"
+            msg += f"訊號：{s['reason']} (距高點空間: {s['dist_to_high']}%)\n"
             msg += f"{news}\n"
             msg += f"🔗 [查看圖表]({yahoo_link})\n"
             msg += "----------------------------\n"
